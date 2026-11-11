@@ -51,6 +51,7 @@ public final class KeyEventHandler
   public void started()
   {
     InputConnection ic = _recv.getCurrentInputConnection();
+    VietnameseTelex.reset();
     _autocap.started(_config, ic);
     _typedword.started(_config, ic);
     _suggestions.started();
@@ -62,6 +63,8 @@ public final class KeyEventHandler
   /** Selection has been updated. */
   public void selection_updated(int oldSelStart, int newSelStart, int newSelEnd)
   {
+    if (newSelStart != newSelEnd || Math.abs(newSelStart - oldSelStart) > 2)
+      VietnameseTelex.reset();
     _autocap.selection_updated(oldSelStart, newSelStart);
     _typedword.selection_updated(oldSelStart, newSelStart, newSelEnd);
   }
@@ -138,6 +141,7 @@ public final class KeyEventHandler
 
   public void suggestion_entered(String text, boolean add_space_after)
   {
+    VietnameseTelex.reset();
     if (add_space_after)
       text = text + " ";
     String old = _typedword.get();
@@ -151,6 +155,7 @@ public final class KeyEventHandler
   @Override
   public void paste_from_clipboard_pane(String content)
   {
+    VietnameseTelex.reset();
     send_text(content);
   }
 
@@ -180,16 +185,6 @@ public final class KeyEventHandler
       sendMetaKeyForModifier(it.next(), true);
     _mods = mods;
   }
-
-  // private void handleDelKey(int before, int after)
-  // {
-  //  CharSequence selection = getCurrentInputConnection().getSelectedText(0);
-
-  //  if (selection != null && selection.length() > 0)
-  //  getCurrentInputConnection().commitText("", 1);
-  //  else
-  //  getCurrentInputConnection().deleteSurroundingText(before, after);
-  // }
 
   void sendMetaKey(int eventCode, int meta_flags, boolean down)
   {
@@ -239,6 +234,10 @@ public final class KeyEventHandler
   /** Ignores currently pressed system modifiers. */
   void send_key_down_up(int keyCode, int metaState)
   {
+    if (keyCode == KeyEvent.KEYCODE_DEL)
+      VietnameseTelex.handleBackspace();
+    else
+      VietnameseTelex.reset();
     send_keyevent(KeyEvent.ACTION_DOWN, keyCode, metaState);
     send_keyevent(KeyEvent.ACTION_UP, keyCode, metaState);
   }
@@ -263,6 +262,32 @@ public final class KeyEventHandler
     InputConnection conn = _recv.getCurrentInputConnection();
     if (conn == null)
       return;
+
+    // Xử lý gõ Telex khi không bật phím tắt hệ thống (Ctrl, Alt, Meta)
+    final int sys_mods = KeyEvent.META_CTRL_ON | KeyEvent.META_ALT_ON | KeyEvent.META_META_ON;
+    if ((_meta_state & sys_mods) == 0 && text.length() == 1)
+    {
+      VietnameseTelex.Result res = VietnameseTelex.processChar(text.charAt(0), conn);
+      if (res != null)
+      {
+        _autocap.typed(res.committedText);
+        if (res.backspaceCount > 0)
+        {
+          replace_surrounding_text(res.backspaceCount, 0, res.committedText);
+        }
+        else
+        {
+          _typedword.typed(res.committedText);
+          conn.commitText(res.committedText, 1);
+        }
+        return;
+      }
+    }
+    else
+    {
+      VietnameseTelex.reset();
+    }
+
     _autocap.typed(text);
     _typedword.typed(text);
     conn.commitText(text, 1);
@@ -297,18 +322,18 @@ public final class KeyEventHandler
     switch (ev)
     {
       case COPY: if(_typedword.is_selection_not_empty()) send_context_menu_action(android.R.id.copy); break;
-      case PASTE: send_context_menu_action(android.R.id.paste); break;
-      case CUT: if(_typedword.is_selection_not_empty()) send_context_menu_action(android.R.id.cut); break;
+      case PASTE: VietnameseTelex.reset(); send_context_menu_action(android.R.id.paste); break;
+      case CUT: VietnameseTelex.reset(); if(_typedword.is_selection_not_empty()) send_context_menu_action(android.R.id.cut); break;
       case SELECT_ALL: send_context_menu_action(android.R.id.selectAll); break;
       case SHARE: send_context_menu_action(android.R.id.shareText); break;
-      case PASTE_PLAIN: send_context_menu_action(android.R.id.pasteAsPlainText); break;
-      case UNDO: send_context_menu_action(android.R.id.undo); break;
-      case REDO: send_context_menu_action(android.R.id.redo); break;
-      case REPLACE: send_context_menu_action(android.R.id.replaceText); break;
+      case PASTE_PLAIN: VietnameseTelex.reset(); send_context_menu_action(android.R.id.pasteAsPlainText); break;
+      case UNDO: VietnameseTelex.reset(); send_context_menu_action(android.R.id.undo); break;
+      case REDO: VietnameseTelex.reset(); send_context_menu_action(android.R.id.redo); break;
+      case REPLACE: VietnameseTelex.reset(); send_context_menu_action(android.R.id.replaceText); break;
       case ASSIST: send_context_menu_action(android.R.id.textAssist); break;
-      case AUTOFILL: send_context_menu_action(android.R.id.autofill); break;
-      case DELETE_WORD: send_key_down_up(KeyEvent.KEYCODE_DEL, KeyEvent.META_CTRL_ON | KeyEvent.META_CTRL_LEFT_ON); break;
-      case FORWARD_DELETE_WORD: send_key_down_up(KeyEvent.KEYCODE_FORWARD_DEL, KeyEvent.META_CTRL_ON | KeyEvent.META_CTRL_LEFT_ON); break;
+      case AUTOFILL: VietnameseTelex.reset(); send_context_menu_action(android.R.id.autofill); break;
+      case DELETE_WORD: VietnameseTelex.reset(); send_key_down_up(KeyEvent.KEYCODE_DEL, KeyEvent.META_CTRL_ON | KeyEvent.META_CTRL_LEFT_ON); break;
+      case FORWARD_DELETE_WORD: VietnameseTelex.reset(); send_key_down_up(KeyEvent.KEYCODE_FORWARD_DEL, KeyEvent.META_CTRL_ON | KeyEvent.META_CTRL_LEFT_ON); break;
       case SELECTION_CANCEL: cancel_selection(); break;
       case SPACE_BAR: handle_space_bar(); break;
       case BACKSPACE: handle_backspace(); break;
@@ -332,6 +357,7 @@ public final class KeyEventHandler
   /** [r] might be negative, in which case the direction is reversed. */
   void handle_slider(KeyValue.Slider s, int r, boolean key_down)
   {
+    VietnameseTelex.reset();
     switch (s)
     {
       case Cursor_left: move_cursor(-r); break;
@@ -554,6 +580,7 @@ public final class KeyEventHandler
   /** Implement autocorrect when enabled in the settings. */
   void handle_space_bar()
   {
+    VietnameseTelex.reset();
     if (_config.space_bar_auto_complete && _suggestions.count > 0
         && !_typedword.is_selection_not_empty()
         && _typedword.cursor_relative() == 0
@@ -576,6 +603,7 @@ public final class KeyEventHandler
     if (_last_action == LastAction.SUGGESTION_ENTERED
         && last_replaced_word != null)
     {
+      VietnameseTelex.reset();
       replace_surrounding_text(last_replacement_word_len, 0, last_replaced_word + " ");
       last_replaced_word = null;
       _next_last_action = LastAction.SUGGESTION_UNDO;
